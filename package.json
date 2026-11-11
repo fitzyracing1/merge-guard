@@ -1,0 +1,16 @@
+{
+  "name": "merge-guard",
+  "version": "0.1.0",
+  "description": "Builds the result of merging each PR into the current base branch, runs CI on that merged result, and reports a single lit/dark status.",
+  "type": "module",
+  "bin": {
+    "merge-guard": "bin/merge-guard.mjs"
+  },
+  "scripts": {
+    "test": "node --test",
+    "demo": "bash demo/run-demo.sh"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
