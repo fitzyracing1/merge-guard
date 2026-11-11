@@ -1,0 +1,133 @@
+name: merge-guard
+description: >-
+  Builds the result of merging a pull request into the CURRENT base branch,
+  runs your CI command on that merged result, and reports a single lit/dark
+  status. The step fails when the merged result would turn CI dark, so making
+  it a required status check blocks the merge. Never force-pushes, never
+  rewrites history, never touches the base or PR branch.
+branding:
+  icon: shield
+  color: green
+
+inputs:
+  ci-command:
+    description: >-
+      Shell command that runs your project's CI, executed at the root of the
+      merged result (e.g. "npm ci && npm test").
+    required: true
+  base-ref:
+    description: >-
+      Base branch to merge into. Defaults to the pull request's base branch.
+    required: false
+    default: ''
+  head-ref:
+    description: >-
+      Ref or sha of the PR head to merge. Defaults to refs/pull/<number>/head
+      of the triggering pull request.
+    required: false
+    default: ''
+  attempt-trivial-resolution:
+    description: >-
+      When the merge conflicts, retry it ignoring whitespace-only differences.
+      Anything more than that is flagged for a human, never guessed at.
+    required: false
+    default: 'false'
+  resolution-branch:
+    description: >-
+      Name of a NEW branch to create at a trivially-resolved merge commit.
+      An existing branch with this name is never overwritten. Empty disables
+      branch creation.
+    required: false
+    default: ''
+  push-resolution-branch:
+    description: >-
+      Push the resolution branch to origin with a plain (never forced) push.
+      Requires a token with push permission on the checkout.
+    required: false
+    default: 'false'
+
+outputs:
+  status:
+    description: lit (merged result is green) or dark (merge would break CI)
+    value: ${{ steps.guard.outputs.status }}
+  merge:
+    description: clean, resolved-trivial, or conflict
+    value: ${{ steps.guard.outputs.merge }}
+  ci:
+    description: pass, fail, or skipped (skipped when the merge conflicted)
+    value: ${{ steps.guard.outputs.ci }}
+  merged-sha:
+    description: sha of the throwaway merge commit that was tested
+    value: ${{ steps.guard.outputs.merged_sha }}
+  resolution-branch:
+    description: name of the resolution branch, if one was created
+    value: ${{ steps.guard.outputs.resolution_branch }}
+  conflicts:
+    description: space-separated list of conflicted paths, if any
+    value: ${{ steps.guard.outputs.conflicts }}
+
+runs:
+  using: composite
+  steps:
+    - id: guard
+      shell: bash
+      env:
+        INPUT_CI_COMMAND: ${{ inputs.ci-command }}
+        INPUT_BASE_REF: ${{ inputs.base-ref }}
+        INPUT_HEAD_REF: ${{ inputs.head-ref }}
+        INPUT_TRIVIAL: ${{ inputs.attempt-trivial-resolution }}
+        INPUT_RESOLUTION_BRANCH: ${{ inputs.resolution-branch }}
+        INPUT_PUSH: ${{ inputs.push-resolution-branch }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        EVENT_BASE_REF: ${{ github.base_ref }}
+      run: |
+        set -euo pipefail
+
+        BASE_REF="${INPUT_BASE_REF:-${EVENT_BASE_REF:-}}"
+        if [ -z "$BASE_REF" ]; then
+          echo "merge-guard: could not determine the base branch." >&2
+          echo "Run on a pull_request event or set the base-ref input." >&2
+          exit 2
+        fi
+
+        if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+          echo "merge-guard: shallow checkout detected; fetching full history" >&2
+          echo "(tip: use actions/checkout with fetch-depth: 0 to skip this)" >&2
+          git fetch --unshallow --no-tags origin
+        fi
+
+        # Always fetch the CURRENT tip of the base branch -- that is the point.
+        git fetch --no-tags origin "+refs/heads/$BASE_REF:refs/merge-guard/base"
+
+        if [ -n "$INPUT_HEAD_REF" ]; then
+          HEAD_SPEC="$INPUT_HEAD_REF"
+        else
+          HEAD_SPEC="refs/pull/$PR_NUMBER/head"
+        fi
+        if git rev-parse --verify --quiet "$HEAD_SPEC^{commit}" >/dev/null; then
+          HEAD_LOCAL="$HEAD_SPEC"
+        else
+          git fetch --no-tags origin "+$HEAD_SPEC:refs/merge-guard/head"
+          HEAD_LOCAL="refs/merge-guard/head"
+        fi
+
+        ARGS=(--repo . --base refs/merge-guard/base --head "$HEAD_LOCAL" --ci "$INPUT_CI_COMMAND")
+        if [ "$INPUT_TRIVIAL" = "true" ]; then
+          ARGS+=(--attempt-trivial-resolution)
+        fi
+        if [ -n "$INPUT_RESOLUTION_BRANCH" ]; then
+          ARGS+=(--resolution-branch "$INPUT_RESOLUTION_BRANCH")
+        fi
+
+        set +e
+        node "$GITHUB_ACTION_PATH/bin/merge-guard.mjs" "${ARGS[@]}"
+        RC=$?
+        set -e
+
+        if [ "$INPUT_PUSH" = "true" ] && [ -n "$INPUT_RESOLUTION_BRANCH" ] \
+           && git rev-parse --verify --quiet "refs/heads/$INPUT_RESOLUTION_BRANCH" >/dev/null; then
+          # Plain push only: creates or fast-forwards the branch, never forces.
+          git push origin "refs/heads/$INPUT_RESOLUTION_BRANCH:refs/heads/$INPUT_RESOLUTION_BRANCH"
+        fi
+
+        exit "$RC"

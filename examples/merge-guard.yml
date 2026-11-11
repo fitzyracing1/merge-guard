@@ -1,0 +1,26 @@
+# Drop this file into .github/workflows/merge-guard.yml of any repository,
+# set ci-command to whatever runs your CI, and (recommended) mark the
+# "merge-guard" check as required in your branch protection rules so a dark
+# merged result actually blocks the merge button.
+name: merge-guard
+
+on:
+  pull_request:
+
+jobs:
+  merge-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history lets merge-guard find the merge base cheaply.
+          fetch-depth: 0
+
+      - uses: fitzyracing1/merge-guard@v0.1.0
+        with:
+          # The command that decides lit or dark for YOUR project:
+          ci-command: npm ci && npm test
+          # Optional: resolve whitespace-only merge conflicts on a NEW branch.
+          # attempt-trivial-resolution: true
+          # resolution-branch: merge-guard/resolved-pr-${{ github.event.pull_request.number }}
+          # push-resolution-branch: true   # plain push, never force

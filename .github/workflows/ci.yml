@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+      - 'v*'
+  pull_request:
+
+jobs:
+  test:
+    name: unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: node --test
+
+  demo:
+    name: demo (green head, dark merge)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prove merge-guard catches what a plain PR-head check misses
+        run: bash demo/run-demo.sh
+
+  self-guard:
+    name: merge-guard (dogfooding on this PR)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Guard this PR's merged result
+        uses: ./
+        with:
+          ci-command: node --test
